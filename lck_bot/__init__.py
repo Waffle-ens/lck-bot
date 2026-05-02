@@ -1,0 +1,1 @@
+"""LCK Discord bot package."""

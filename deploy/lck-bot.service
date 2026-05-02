@@ -1,0 +1,17 @@
+[Unit]
+Description=LCK Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/lck_bot
+EnvironmentFile=/opt/lck_bot/.env
+ExecStart=/opt/lck_bot/.venv/bin/python -m lck_bot.bot
+Restart=always
+RestartSec=10
+User=lckbot
+Group=lckbot
+
+[Install]
+WantedBy=multi-user.target
