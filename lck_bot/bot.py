@@ -73,14 +73,14 @@ class LckDiscordBot(discord.Client):
         await self.lolesports.start()
         register_commands(self)
 
+        global_synced = await self.tree.sync()
+        LOGGER.info("Synced %d global commands.", len(global_synced))
+
         if self.settings.discord_guild_id:
             guild = discord.Object(id=self.settings.discord_guild_id)
             self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            LOGGER.info("Synced %d guild commands.", len(synced))
-        else:
-            synced = await self.tree.sync()
-            LOGGER.info("Synced %d global commands.", len(synced))
+            guild_synced = await self.tree.sync(guild=guild)
+            LOGGER.info("Synced %d guild commands.", len(guild_synced))
 
         self.tracker.start()
         self._yesterday_cache_task = asyncio.create_task(_yesterday_cache_worker(self))
@@ -379,8 +379,6 @@ def _report_missing_reasons(match_name: str, reports: list[GameReport]) -> list[
     reasons: list[str] = []
     for report in reports:
         prefix = f"{match_name} {report.set_number}세트"
-        if report.duration_ms is None:
-            reasons.append(f"{prefix}: duration is missing")
         if report.blue_kills is None or report.red_kills is None:
             reasons.append(f"{prefix}: team kills are missing")
         if report.blue_gold is None or report.red_gold is None:

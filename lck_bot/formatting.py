@@ -52,7 +52,7 @@ def format_kst(value: str | None) -> str:
 
 def format_game_clock(milliseconds: int | None) -> str:
     if milliseconds is None:
-        return "??:??"
+        return "시간 미제공"
     seconds = max(0, milliseconds // 1000)
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
