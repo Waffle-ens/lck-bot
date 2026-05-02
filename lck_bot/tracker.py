@@ -37,9 +37,9 @@ class GameSnapshot:
     red_kills: int
     blue_barons: int
     red_barons: int
+    timestamp_ms: int | None
     blue_dragons: list[str] = field(default_factory=list)
     red_dragons: list[str] = field(default_factory=list)
-    timestamp_ms: int | None
     draft: list[DraftLine] = field(default_factory=list)
     kill_events: list[KillEvent] = field(default_factory=list)
 
