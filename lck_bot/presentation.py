@@ -161,6 +161,40 @@ def render_match_not_found(match_name: str, events: list[dict[str, Any]]) -> dis
     return embed
 
 
+def render_yesterday_match_selection_required(events: list[dict[str, Any]]) -> discord.Embed:
+    embed = discord.Embed(
+        title="어제 경기 결과를 볼 매치를 선택해주세요",
+        description="`/어제경기` 명령어의 `매치` 옵션에서 어제 경기 중 하나를 선택하면 됩니다.",
+        color=GOLD,
+    )
+    lines = [
+        f"`{_event_time(event)}` {_event_title(event)} - {_event_state_label(event.get('state'))}"
+        for event in events
+    ]
+    embed.add_field(name="어제 경기", value=_value(lines), inline=False)
+    return embed
+
+
+def render_yesterday_match_not_found(match_name: str, events: list[dict[str, Any]]) -> discord.Embed:
+    embed = discord.Embed(
+        title="매치를 찾지 못했습니다",
+        description=f"`{match_name}`와 일치하는 어제 LCK 경기를 찾지 못했습니다.",
+        color=GOLD,
+    )
+    if events:
+        lines = [f"`{_event_time(event)}` {_event_title(event)}" for event in events]
+        embed.add_field(name="선택 가능한 매치", value=_value(lines), inline=False)
+    return embed
+
+
+def render_no_yesterday_games() -> discord.Embed:
+    return discord.Embed(
+        title="어제 진행된 LCK 경기가 없습니다",
+        description="어제 날짜 기준으로 조회 가능한 LCK 경기를 찾지 못했습니다.",
+        color=GRAY,
+    )
+
+
 def render_no_summary_today(events: list[dict[str, Any]]) -> discord.Embed:
     embed = discord.Embed(
         title="요약할 완료 경기가 없습니다",
@@ -252,6 +286,11 @@ def render_command_help() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="/어제경기",
+        value="어제 매치를 선택해 세트별 결과와 선수별 K/D/A, 딜 비중을 보여줍니다.",
+        inline=False,
+    )
+    embed.add_field(
         name="/명령어",
         value="이 안내 메시지를 보여줍니다.",
         inline=False,
@@ -330,6 +369,24 @@ def render_result_game(report: GameReport) -> discord.Embed:
     return embed
 
 
+def render_yesterday_game(report: GameReport) -> discord.Embed:
+    embed = render_result_game(report)
+    embed.title = f"{report.set_number}세트 어제 경기 결과"
+
+    for team in _teams(report):
+        lines = [
+            (
+                f"`{player.role}` {player.player} ({player.champion}) "
+                f"{_kda(player.kills, player.deaths, player.assists)} | 딜 비중 {_damage_share_or_dash(player.damage_share)}"
+            )
+            for player in report.players
+            if player.team == team
+        ]
+        embed.add_field(name=f"{team} 선수 기록", value=_value(lines), inline=False)
+
+    return embed
+
+
 def render_pending_result_game(report: GameReport) -> discord.Embed:
     if report.state == "unstarted":
         description = "아직 진행 전입니다."
@@ -356,6 +413,14 @@ def _kda(kills: int | None, deaths: int | None, assists: int | None) -> str:
     if kills is None and deaths is None and assists is None:
         return "-"
     return f"{kills or 0}/{deaths or 0}/{assists or 0}"
+
+
+def _damage_share_or_dash(value: float | None) -> str:
+    if value is None:
+        return "-"
+    percentage = value * 100 if value <= 1 else value
+    text = f"{percentage:.1f}".rstrip("0").rstrip(".")
+    return f"{text}%"
 
 
 def _number_or_dash(value: int | None) -> str:

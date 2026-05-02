@@ -392,6 +392,7 @@ def add_report_checks(
 ) -> None:
     report = build_game_report(event, game, window, details)
     damage_count = sum(1 for player in report.players if player.damage is not None)
+    damage_share_count = sum(1 for player in report.players if player.damage_share is not None)
     ban_count = sum(len(draft.bans) for draft in report.draft)
     checks.append(
         CheckResult(
@@ -411,6 +412,7 @@ def add_report_checks(
                 "excludedUnstableFields": {
                     "banCountSeen": ban_count,
                     "playersWithDamageSeen": damage_count,
+                    "playersWithDamageShareSeen": damage_share_count,
                     "winnerSeen": report.winner,
                 },
                 "samplePlayers": [
@@ -421,6 +423,7 @@ def add_report_checks(
                         "champion": player.champion,
                         "kda": [player.kills, player.deaths, player.assists],
                         "damage": player.damage,
+                        "damageShare": player.damage_share,
                     }
                     for player in report.players[:4]
                 ],

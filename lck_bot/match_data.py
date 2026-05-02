@@ -19,6 +19,7 @@ class PlayerLine:
     deaths: int | None = None
     assists: int | None = None
     damage: int | None = None
+    damage_share: float | None = None
     result: str = "-"
 
 
@@ -188,6 +189,7 @@ def _player_lines(
                     deaths=_stat_int(stats, "deaths"),
                     assists=_stat_int(stats, "assists"),
                     damage=_damage(stats),
+                    damage_share=_damage_share(stats),
                     result=_result_label(team_name, winner),
                 )
             )
@@ -400,6 +402,14 @@ def _damage(stats: dict[str, Any]) -> int | None:
     return None
 
 
+def _damage_share(stats: dict[str, Any]) -> float | None:
+    for key in ("championDamageShare", "damageShare", "teamDamagePercentage"):
+        value = _to_float(stats.get(key))
+        if value is not None:
+            return value
+    return None
+
+
 def _stat_int(stats: dict[str, Any], key: str) -> int | None:
     return _to_int(stats.get(key))
 
@@ -417,6 +427,13 @@ def _dragon_list(value: Any) -> list[str]:
 def _to_int(value: Any) -> int | None:
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 

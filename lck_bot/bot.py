@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -24,13 +26,18 @@ from lck_bot.presentation import (
     render_no_completed_today,
     render_no_summary_today,
     render_no_today_games,
+    render_no_yesterday_games,
     render_pending_result_game,
     render_result_game,
     render_result_redirect_notice,
     render_result_summary,
     render_roster,
     render_upcoming_today,
+    render_yesterday_game,
+    render_yesterday_match_not_found,
+    render_yesterday_match_selection_required,
 )
+from lck_bot.report_cache import YesterdayMatchCache, cached_match_payload
 from lck_bot.tracker import LiveTracker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -42,6 +49,7 @@ COOLDOWNS = {
     "로스터": CooldownRule(user_seconds=120, guild_seconds=30),
     "경기결과": CooldownRule(user_seconds=180, guild_seconds=30),
     "경기요약": CooldownRule(user_seconds=180, guild_seconds=30),
+    "어제경기": CooldownRule(user_seconds=180, guild_seconds=30),
     "명령어": CooldownRule(user_seconds=30, guild_seconds=10),
 }
 
@@ -58,6 +66,8 @@ class LckDiscordBot(discord.Client):
         )
         self.tracker = LiveTracker(self.lolesports, self.settings.poll_seconds)
         self.cooldowns = CooldownManager()
+        self.yesterday_cache = YesterdayMatchCache(self.settings.cache_dir)
+        self._yesterday_cache_task: asyncio.Task[None] | None = None
 
     async def setup_hook(self) -> None:
         await self.lolesports.start()
@@ -73,8 +83,13 @@ class LckDiscordBot(discord.Client):
             LOGGER.info("Synced %d global commands.", len(synced))
 
         self.tracker.start()
+        self._yesterday_cache_task = asyncio.create_task(_yesterday_cache_worker(self))
 
     async def close(self) -> None:
+        if self._yesterday_cache_task:
+            self._yesterday_cache_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._yesterday_cache_task
         await self.tracker.stop()
         await self.lolesports.close()
         await super().close()
@@ -178,6 +193,69 @@ def register_commands(bot: LckDiscordBot) -> None:
         return choices[:25]
 
     @bot.tree.command(
+        name="어제경기",
+        description="어제 진행된 LCK 경기의 세트별 결과와 선수별 K/D/A, 딜 비중을 보여줍니다.",
+    )
+    async def yesterday_result(interaction: discord.Interaction, 매치: str | None = None) -> None:
+        await interaction.response.defer(thinking=True)
+        if await _send_cooldown_if_needed(bot, interaction, "어제경기"):
+            return
+        try:
+            yesterday_events = await _yesterdays_events(bot)
+            yesterday_events.sort(key=_event_sort_key)
+            if not yesterday_events:
+                await interaction.followup.send(embed=render_no_yesterday_games())
+                return
+
+            if not 매치:
+                await interaction.followup.send(embed=render_yesterday_match_selection_required(yesterday_events))
+                return
+
+            selected_event = _find_event_by_match_name(yesterday_events, 매치)
+            if not selected_event:
+                await interaction.followup.send(embed=render_yesterday_match_not_found(매치, yesterday_events))
+                return
+
+            target_date = _yesterday_date()
+            cached_reports = bot.yesterday_cache.match_reports(target_date, _event_match_name(selected_event))
+            if cached_reports:
+                for report in cached_reports:
+                    await interaction.followup.send(embed=render_yesterday_game(report))
+                return
+
+            event = await _event_details(bot, selected_event)
+            reports = [
+                report
+                for report in await _build_reports(bot, event)
+                if report.state == "completed"
+            ]
+            if not reports:
+                await interaction.followup.send("선택한 어제 매치의 완료 세트 데이터를 가져오지 못했습니다.")
+                return
+            for report in reports:
+                await interaction.followup.send(embed=render_yesterday_game(report))
+        except LolesportsError as exc:
+            await interaction.followup.send(f"LoL Esports 데이터를 가져오지 못했습니다: `{exc}`")
+
+    @yesterday_result.autocomplete("매치")
+    async def yesterday_match_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        try:
+            events = await _yesterdays_events(bot)
+        except LolesportsError:
+            return []
+        current_lower = current.lower()
+        choices: list[app_commands.Choice[str]] = []
+        for event in sorted(events, key=_event_sort_key):
+            label = _match_choice_label(event)
+            if current_lower and current_lower not in label.lower():
+                continue
+            choices.append(app_commands.Choice(name=label, value=_event_match_name(event)))
+        return choices[:25]
+
+    @bot.tree.command(
         name="경기요약",
         description="오늘 완료된 LCK 경기의 매치 승패와 세트 요약을 보여줍니다.",
     )
@@ -235,6 +313,97 @@ async def _send_today_status(bot: LckDiscordBot, interaction: discord.Interactio
     await interaction.followup.send(embed=render_no_today_games(next_event))
 
 
+async def _yesterday_cache_worker(bot: LckDiscordBot) -> None:
+    while True:
+        now = datetime.now(KST)
+        ready_at = datetime.combine(now.date(), time(hour=0, minute=10), tzinfo=KST)
+        if now < ready_at:
+            await asyncio.sleep((ready_at - now).total_seconds())
+            continue
+
+        target_date = now.date() - timedelta(days=1)
+        if bot.yesterday_cache.is_complete(target_date):
+            await asyncio.sleep(_seconds_until_next_cache_window())
+            continue
+
+        try:
+            complete = await _refresh_yesterday_cache(bot, target_date)
+        except LolesportsError as exc:
+            LOGGER.info("Could not refresh yesterday cache for %s: %s", target_date, exc)
+            complete = False
+
+        await asyncio.sleep(_seconds_until_next_cache_window() if complete else 15 * 60)
+
+
+async def _refresh_yesterday_cache(bot: LckDiscordBot, target_date: date) -> bool:
+    events = await _events_on_date(bot, target_date)
+    events.sort(key=_event_sort_key)
+    if not events:
+        bot.yesterday_cache.save_day(target_date, [], complete=True)
+        LOGGER.info("Cached empty yesterday match list for %s.", target_date)
+        return True
+
+    matches: list[dict[str, Any]] = []
+    reasons: list[str] = []
+    for event_summary in events:
+        event = await _event_details(bot, event_summary)
+        reports = [
+            report
+            for report in await _build_reports(bot, event)
+            if report.state == "completed"
+        ]
+        match_name = _event_match_name(event)
+        reasons.extend(_report_missing_reasons(match_name, reports))
+        matches.append(
+            cached_match_payload(
+                match_name=match_name,
+                start_time=event.get("startTime"),
+                state=_event_state(event),
+                reports=reports,
+            )
+        )
+
+    complete = not reasons
+    bot.yesterday_cache.save_day(target_date, matches, complete=complete, reasons=reasons)
+    if complete:
+        LOGGER.info("Cached yesterday matches for %s.", target_date)
+    else:
+        LOGGER.info("Yesterday cache for %s is incomplete: %s", target_date, "; ".join(reasons[:5]))
+    return complete
+
+
+def _report_missing_reasons(match_name: str, reports: list[GameReport]) -> list[str]:
+    if not reports:
+        return [f"{match_name}: completed set data is missing"]
+
+    reasons: list[str] = []
+    for report in reports:
+        prefix = f"{match_name} {report.set_number}세트"
+        if report.duration_ms is None:
+            reasons.append(f"{prefix}: duration is missing")
+        if report.blue_kills is None or report.red_kills is None:
+            reasons.append(f"{prefix}: team kills are missing")
+        if report.blue_gold is None or report.red_gold is None:
+            reasons.append(f"{prefix}: team gold is missing")
+        if len(report.draft) < 2 or any(not draft.picks for draft in report.draft):
+            reasons.append(f"{prefix}: champion picks are missing")
+        if len(report.players) < 10:
+            reasons.append(f"{prefix}: player rows are missing")
+            continue
+        for player in report.players:
+            if player.kills is None or player.deaths is None or player.assists is None:
+                reasons.append(f"{prefix}: {player.player} K/D/A is missing")
+            if player.damage_share is None:
+                reasons.append(f"{prefix}: {player.player} damage share is missing")
+    return reasons
+
+
+def _seconds_until_next_cache_window() -> float:
+    now = datetime.now(KST)
+    next_ready = datetime.combine(now.date() + timedelta(days=1), time(hour=0, minute=10), tzinfo=KST)
+    return max(60.0, (next_ready - now).total_seconds())
+
+
 async def _send_cooldown_if_needed(
     bot: LckDiscordBot,
     interaction: discord.Interaction,
@@ -269,7 +438,10 @@ async def _build_reports(
     reports: list[GameReport] = []
     games = event.get("match", {}).get("games", [])
     for index, game in enumerate(games, start=1):
-        if game_state(game) == "unstarted" and not include_unstarted:
+        state = game_state(game)
+        if state == "unneeded":
+            continue
+        if state == "unstarted" and not include_unstarted:
             continue
         game_id = str(game.get("id") or "")
         if not game_id:
@@ -304,9 +476,20 @@ def _match_choice_label(event: dict[str, Any]) -> str:
 
 
 async def _todays_events(bot: LckDiscordBot) -> list[dict[str, Any]]:
+    return await _events_on_date(bot, datetime.now(KST).date())
+
+
+async def _yesterdays_events(bot: LckDiscordBot) -> list[dict[str, Any]]:
+    return await _events_on_date(bot, _yesterday_date())
+
+
+async def _events_on_date(bot: LckDiscordBot, target_date: date) -> list[dict[str, Any]]:
     events = await bot.lolesports.get_schedule_events()
-    today = datetime.now(KST).date()
-    return [event for event in events if _event_date(event) == today]
+    return [event for event in events if _event_date(event) == target_date]
+
+
+def _yesterday_date() -> date:
+    return datetime.now(KST).date() - timedelta(days=1)
 
 
 async def _next_event(bot: LckDiscordBot) -> dict[str, Any] | None:

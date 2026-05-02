@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any, Awaitable, Callable, TypeVar
 
 import aiohttp
@@ -21,12 +22,19 @@ class SelectedEvent:
     game: dict[str, Any] | None
 
 
+@dataclass
+class _CacheEntry:
+    expires_at: float
+    payload: dict[str, Any]
+
+
 class LolesportsClient:
     def __init__(self, api_key: str, locale: str, league_id: str) -> None:
         self.api_key = api_key
         self.locale = locale
         self.league_id = league_id
         self._session: aiohttp.ClientSession | None = None
+        self._cache: dict[tuple[str, tuple[tuple[str, str], ...]], _CacheEntry] = {}
 
     async def __aenter__(self) -> LolesportsClient:
         await self.start()
@@ -48,17 +56,34 @@ class LolesportsClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _get(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        ttl_seconds: int = 0,
+    ) -> dict[str, Any]:
+        key = _cache_key(url, params)
+        if ttl_seconds > 0:
+            cached = self._cache.get(key)
+            if cached and cached.expires_at > monotonic():
+                return cached.payload
+
         await self.start()
         assert self._session is not None
         try:
             async with self._session.get(url, params=params) as response:
                 if response.status == 204:
-                    return {}
+                    payload: dict[str, Any] = {}
+                    if ttl_seconds > 0:
+                        self._cache[key] = _CacheEntry(monotonic() + ttl_seconds, payload)
+                    return payload
                 if response.status >= 400:
                     text = await response.text()
                     raise LolesportsError(f"LoL Esports API {response.status}: {text[:200]}")
-                return await response.json()
+                payload = await response.json()
+                if ttl_seconds > 0:
+                    self._cache[key] = _CacheEntry(monotonic() + ttl_seconds, payload)
+                return payload
         except TimeoutError as exc:
             raise LolesportsError("LoL Esports API request timed out.") from exc
         except aiohttp.ClientError as exc:
@@ -68,6 +93,7 @@ class LolesportsClient:
         return await self._get(
             "https://esports-api.lolesports.com/persisted/gw/getSchedule",
             {"hl": self.locale, "leagueId": self.league_id},
+            ttl_seconds=60,
         )
 
     async def get_schedule_events(self) -> list[dict[str, Any]]:
@@ -77,19 +103,28 @@ class LolesportsClient:
         return await self._get(
             "https://esports-api.lolesports.com/persisted/gw/getEventDetails",
             {"hl": self.locale, "id": event_id},
+            ttl_seconds=60,
         )
 
     async def get_live_window(
         self, game_id: str, starting_time: str | None = None
     ) -> dict[str, Any]:
         params = {"startingTime": starting_time} if starting_time else None
-        return await self._get(f"https://feed.lolesports.com/livestats/v1/window/{game_id}", params)
+        return await self._get(
+            f"https://feed.lolesports.com/livestats/v1/window/{game_id}",
+            params,
+            ttl_seconds=15,
+        )
 
     async def get_live_details(
         self, game_id: str, starting_time: str | None = None
     ) -> dict[str, Any]:
         params = {"startingTime": starting_time} if starting_time else None
-        return await self._get(f"https://feed.lolesports.com/livestats/v1/details/{game_id}", params)
+        return await self._get(
+            f"https://feed.lolesports.com/livestats/v1/details/{game_id}",
+            params,
+            ttl_seconds=60,
+        )
 
     async def find_current_event(self) -> SelectedEvent | None:
         events = await self.get_schedule_events()
@@ -156,6 +191,10 @@ class LolesportsClient:
 
     def event_id(self, event: dict[str, Any]) -> str:
         return self._event_id(event)
+
+
+def _cache_key(url: str, params: dict[str, Any] | None) -> tuple[str, tuple[tuple[str, str], ...]]:
+    return url, tuple(sorted((str(key), str(value)) for key, value in (params or {}).items()))
 
 
 async def retry_api_call(call: Callable[[], Awaitable[T]], attempts: int = 2) -> T:

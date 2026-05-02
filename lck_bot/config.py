@@ -17,6 +17,7 @@ class Settings:
     league_id: str
     api_key: str
     poll_seconds: int
+    cache_dir: str
 
 
 def load_settings() -> Settings:
@@ -39,4 +40,5 @@ def load_settings() -> Settings:
         league_id=os.getenv("LCK_LEAGUE_ID", "98767991310872058").strip(),
         api_key=os.getenv("LCK_API_KEY", DEFAULT_LCK_API_KEY).strip() or DEFAULT_LCK_API_KEY,
         poll_seconds=poll_seconds,
+        cache_dir=os.getenv("LCK_CACHE_DIR", "data/cache").strip() or "data/cache",
     )
