@@ -222,6 +222,44 @@ def render_cooldown(command_name: str, hit: CooldownHit) -> discord.Embed:
     return embed
 
 
+def render_command_help() -> discord.Embed:
+    embed = discord.Embed(
+        title="LCK Bot 명령어 안내",
+        description="오늘의 LCK 경기 일정, 진행 상황, 결과를 Discord에서 바로 확인할 수 있습니다.",
+        color=BLUE,
+    )
+    embed.add_field(
+        name="/경기상황",
+        value=(
+            "오늘 경기 상태에 맞춰 현재 상황을 보여줍니다.\n"
+            "진행 중이면 스코어, 골드, 오브젝트, 픽, 킬 타임라인을 표시합니다."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/로스터",
+        value="현재 세트의 출전 로스터와 챔피언 픽을 팀별로 보여줍니다.",
+        inline=False,
+    )
+    embed.add_field(
+        name="/경기결과",
+        value="오늘 매치를 선택해 세트별 스코어, 골드, 오브젝트, 픽을 보여줍니다.",
+        inline=False,
+    )
+    embed.add_field(
+        name="/경기요약",
+        value="오늘 완료된 경기의 매치 승패와 세트별 진행시간을 요약합니다.",
+        inline=False,
+    )
+    embed.add_field(
+        name="/명령어",
+        value="이 안내 메시지를 보여줍니다.",
+        inline=False,
+    )
+    embed.set_footer(text="킬 타임라인은 공개 API 프레임 데이터를 기반으로 추론됩니다.")
+    return embed
+
+
 def render_result_summary(event: dict[str, Any], reports: list[GameReport]) -> discord.Embed:
     match = event.get("match", {})
     teams = match.get("teams", [])

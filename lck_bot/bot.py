@@ -15,6 +15,7 @@ from lck_bot.lolesports import LolesportsClient, LolesportsError, latest_startin
 from lck_bot.match_data import GameReport, build_game_report, game_state
 from lck_bot.presentation import (
     render_cooldown,
+    render_command_help,
     render_live_pending,
     render_live_redirect_notice,
     render_live_status,
@@ -41,6 +42,7 @@ COOLDOWNS = {
     "로스터": CooldownRule(user_seconds=120, guild_seconds=30),
     "경기결과": CooldownRule(user_seconds=180, guild_seconds=30),
     "경기요약": CooldownRule(user_seconds=180, guild_seconds=30),
+    "명령어": CooldownRule(user_seconds=30, guild_seconds=10),
 }
 
 
@@ -82,6 +84,13 @@ class LckDiscordBot(discord.Client):
 
 
 def register_commands(bot: LckDiscordBot) -> None:
+    @bot.tree.command(name="명령어", description="LCK Bot에서 사용할 수 있는 명령어를 안내합니다.")
+    async def help_command(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        if await _send_cooldown_if_needed(bot, interaction, "명령어"):
+            return
+        await interaction.followup.send(embed=render_command_help())
+
     @bot.tree.command(name="로스터", description="현재 LCK 세트의 출전 로스터와 챔피언 픽을 보여줍니다.")
     async def roster(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
