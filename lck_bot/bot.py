@@ -15,9 +15,15 @@ from lck_bot.lolesports import LolesportsClient, LolesportsError, latest_startin
 from lck_bot.match_data import GameReport, build_game_report, game_state
 from lck_bot.presentation import (
     render_cooldown,
-    render_live_status,
-    render_no_today_games,
     render_live_pending,
+    render_live_redirect_notice,
+    render_live_status,
+    render_match_not_found,
+    render_match_selection_required,
+    render_no_completed_today,
+    render_no_summary_today,
+    render_no_today_games,
+    render_pending_result_game,
     render_result_game,
     render_result_redirect_notice,
     render_result_summary,
@@ -29,10 +35,12 @@ from lck_bot.tracker import LiveTracker
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
+
 COOLDOWNS = {
     "경기상황": CooldownRule(user_seconds=30, guild_seconds=10),
     "로스터": CooldownRule(user_seconds=120, guild_seconds=30),
     "경기결과": CooldownRule(user_seconds=180, guild_seconds=30),
+    "경기요약": CooldownRule(user_seconds=180, guild_seconds=30),
 }
 
 
@@ -93,74 +101,129 @@ def register_commands(bot: LckDiscordBot) -> None:
 
     @bot.tree.command(
         name="경기상황",
-        description="현재 LCK 세트의 세트 상황, 밴픽, 킬 타임라인, 골드 차이를 보여줍니다.",
+        description="오늘 LCK 경기의 예정, 진행, 종료 상태에 맞춰 현재 상황을 보여줍니다.",
     )
     async def live_status(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         if await _send_cooldown_if_needed(bot, interaction, "경기상황"):
             return
         try:
-            todays_events = await _todays_events(bot)
-            live_events = [event for event in todays_events if _event_state(event) == "inprogress"]
-            if live_events:
-                snapshot = await bot.tracker.get_snapshot()
-                if not snapshot:
-                    upcoming = [event for event in todays_events if _event_state(event) == "unstarted"]
-                    upcoming.sort(key=_event_sort_key)
-                    await interaction.followup.send(embed=render_live_pending(live_events[0], upcoming))
-                    return
-                await interaction.followup.send(embed=render_live_status(snapshot))
-                return
-
-            upcoming = [event for event in todays_events if _event_state(event) == "unstarted"]
-            if upcoming:
-                upcoming.sort(key=_event_sort_key)
-                await interaction.followup.send(embed=render_upcoming_today(upcoming))
-                return
-
-            completed = [event for event in todays_events if _event_state(event) == "completed"]
-            if completed:
-                completed.sort(key=_event_sort_key, reverse=True)
-                event = await _event_details(bot, completed[0])
-                reports = await _build_reports(bot, event)
-                if not reports:
-                    await interaction.followup.send("오늘 경기는 종료되었지만 세트별 상세 데이터를 가져오지 못했습니다.")
-                    return
-                await interaction.followup.send(embed=render_result_redirect_notice())
-                await interaction.followup.send(embed=render_result_summary(event, reports))
-                for report in reports:
-                    await interaction.followup.send(embed=render_result_game(report))
-                return
-
-            next_event = await _next_event(bot)
-            await interaction.followup.send(embed=render_no_today_games(next_event))
+            await _send_today_status(bot, interaction)
         except LolesportsError as exc:
             await interaction.followup.send(f"LoL Esports 데이터를 가져오지 못했습니다: `{exc}`")
 
     @bot.tree.command(
         name="경기결과",
-        description="최근 완료된 LCK 경기의 세트별 진행시간, 픽, 선수 K/D/A를 보여줍니다.",
+        description="오늘 완료된 LCK 경기의 세트별 스코어, 골드, 오브젝트, 픽을 보여줍니다.",
     )
-    async def result(interaction: discord.Interaction) -> None:
+    async def result(interaction: discord.Interaction, 매치: str | None = None) -> None:
         await interaction.response.defer(thinking=True)
         if await _send_cooldown_if_needed(bot, interaction, "경기결과"):
             return
         try:
-            selected = await bot.lolesports.find_recent_completed_event()
-            if not selected:
-                await interaction.followup.send("최근 완료된 LCK 경기 결과를 찾지 못했습니다.")
+            todays_events = await _todays_events(bot)
+            todays_events.sort(key=_event_sort_key)
+            if not todays_events:
+                next_event = await _next_event(bot)
+                await interaction.followup.send(embed=render_no_today_games(next_event))
                 return
 
-            reports = await _build_reports(bot, selected.event)
+            if not 매치:
+                await interaction.followup.send(embed=render_match_selection_required(todays_events))
+                return
+
+            selected_event = _find_event_by_match_name(todays_events, 매치)
+            if not selected_event:
+                await interaction.followup.send(embed=render_match_not_found(매치, todays_events))
+                return
+
+            event = await _event_details(bot, selected_event)
+            reports = await _build_reports(bot, event, include_unstarted=True)
             if not reports:
-                await interaction.followup.send("경기 결과는 찾았지만 세트별 상세 데이터를 가져오지 못했습니다.")
+                await interaction.followup.send("선택한 매치의 세트별 데이터를 가져오지 못했습니다.")
                 return
-
-            await interaction.followup.send(embed=render_result_summary(selected.event, reports))
             for report in reports:
-                await interaction.followup.send(embed=render_result_game(report))
+                if report.state == "completed":
+                    await interaction.followup.send(embed=render_result_game(report))
+                else:
+                    await interaction.followup.send(embed=render_pending_result_game(report))
         except LolesportsError as exc:
             await interaction.followup.send(f"LoL Esports 데이터를 가져오지 못했습니다: `{exc}`")
+
+    @result.autocomplete("매치")
+    async def result_match_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        try:
+            events = await _todays_events(bot)
+        except LolesportsError:
+            return []
+        current_lower = current.lower()
+        choices: list[app_commands.Choice[str]] = []
+        for event in sorted(events, key=_event_sort_key):
+            label = _match_choice_label(event)
+            if current_lower and current_lower not in label.lower():
+                continue
+            choices.append(app_commands.Choice(name=label, value=_event_match_name(event)))
+        return choices[:25]
+
+    @bot.tree.command(
+        name="경기요약",
+        description="오늘 완료된 LCK 경기의 매치 승패와 세트 요약을 보여줍니다.",
+    )
+    async def summary(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        if await _send_cooldown_if_needed(bot, interaction, "경기요약"):
+            return
+        try:
+            todays_events = await _todays_events(bot)
+            completed = [event for event in todays_events if _event_state(event) == "completed"]
+            if not completed:
+                todays_events.sort(key=_event_sort_key)
+                await interaction.followup.send(embed=render_no_summary_today(todays_events))
+                return
+
+            event, reports = await _latest_completed_reports(bot, completed)
+            if not reports:
+                await interaction.followup.send("오늘 완료된 경기는 찾았지만 요약 데이터를 가져오지 못했습니다.")
+                return
+            await interaction.followup.send(embed=render_result_summary(event, reports))
+        except LolesportsError as exc:
+            await interaction.followup.send(f"LoL Esports 데이터를 가져오지 못했습니다: `{exc}`")
+
+
+async def _send_today_status(bot: LckDiscordBot, interaction: discord.Interaction) -> None:
+    todays_events = await _todays_events(bot)
+    live_events = [event for event in todays_events if _event_state(event) == "inprogress"]
+    if live_events:
+        snapshot = await bot.tracker.get_snapshot()
+        if snapshot:
+            await interaction.followup.send(embed=render_live_status(snapshot))
+        else:
+            upcoming = [event for event in todays_events if _event_state(event) == "unstarted"]
+            upcoming.sort(key=_event_sort_key)
+            await interaction.followup.send(embed=render_live_pending(live_events[0], upcoming))
+        return
+
+    upcoming = [event for event in todays_events if _event_state(event) == "unstarted"]
+    if upcoming:
+        upcoming.sort(key=_event_sort_key)
+        await interaction.followup.send(embed=render_upcoming_today(upcoming))
+        return
+
+    completed = [event for event in todays_events if _event_state(event) == "completed"]
+    if completed:
+        event, reports = await _latest_completed_reports(bot, completed)
+        if not reports:
+            await interaction.followup.send("오늘 경기는 종료되었지만 세트별 상세 데이터를 가져오지 못했습니다.")
+            return
+        await interaction.followup.send(embed=render_result_redirect_notice())
+        await interaction.followup.send(embed=render_result_summary(event, reports))
+        return
+
+    next_event = await _next_event(bot)
+    await interaction.followup.send(embed=render_no_today_games(next_event))
 
 
 async def _send_cooldown_if_needed(
@@ -180,11 +243,24 @@ async def _send_cooldown_if_needed(
     return True
 
 
-async def _build_reports(bot: LckDiscordBot, event: dict[str, Any]) -> list[GameReport]:
+async def _latest_completed_reports(
+    bot: LckDiscordBot,
+    completed_events: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[GameReport]]:
+    completed_events.sort(key=_event_sort_key, reverse=True)
+    event = await _event_details(bot, completed_events[0])
+    return event, await _build_reports(bot, event)
+
+
+async def _build_reports(
+    bot: LckDiscordBot,
+    event: dict[str, Any],
+    include_unstarted: bool = False,
+) -> list[GameReport]:
     reports: list[GameReport] = []
     games = event.get("match", {}).get("games", [])
     for index, game in enumerate(games, start=1):
-        if game_state(game) == "unstarted":
+        if game_state(game) == "unstarted" and not include_unstarted:
             continue
         game_id = str(game.get("id") or "")
         if not game_id:
@@ -195,6 +271,27 @@ async def _build_reports(bot: LckDiscordBot, event: dict[str, Any]) -> list[Game
         details = await _optional_details(bot, game_id, starting_time)
         reports.append(build_game_report(event, game, window, details, fallback_number=index))
     return reports
+
+
+def _find_event_by_match_name(events: list[dict[str, Any]], match_name: str) -> dict[str, Any] | None:
+    normalized = match_name.strip().lower()
+    for event in events:
+        if _event_match_name(event).lower() == normalized or _match_choice_label(event).lower() == normalized:
+            return event
+    return None
+
+
+def _event_match_name(event: dict[str, Any]) -> str:
+    teams = event.get("match", {}).get("teams", [])
+    if len(teams) >= 2:
+        return f"{teams[0].get('code') or teams[0].get('name')} vs {teams[1].get('code') or teams[1].get('name')}"
+    return event.get("blockName") or "LCK 경기"
+
+
+def _match_choice_label(event: dict[str, Any]) -> str:
+    event_time = _event_datetime(event)
+    time_text = event_time.strftime("%H:%M") if event_time else "시간 미정"
+    return f"{time_text} {_event_match_name(event)}"
 
 
 async def _todays_events(bot: LckDiscordBot) -> list[dict[str, Any]]:

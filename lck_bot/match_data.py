@@ -38,8 +38,19 @@ class GameReport:
     state: str
     duration_ms: int | None
     winner: str | None
-    draft: list[DraftLine]
-    players: list[PlayerLine]
+    loser: str | None
+    blue_name: str
+    red_name: str
+    blue_gold: int | None
+    red_gold: int | None
+    blue_kills: int | None
+    red_kills: int | None
+    blue_barons: int
+    red_barons: int
+    blue_dragons: list[str] = field(default_factory=list)
+    red_dragons: list[str] = field(default_factory=list)
+    draft: list[DraftLine] = field(default_factory=list)
+    players: list[PlayerLine] = field(default_factory=list)
 
 
 def game_number(game: dict[str, Any], fallback: int) -> int:
@@ -107,6 +118,17 @@ def build_game_report(
         state=game_state(game),
         duration_ms=_frame_time(last_frame) or _vod_duration_ms(game) or _duration_from_frames(window),
         winner=winner,
+        loser=_loser_name(winner, team_names),
+        blue_name=team_names[0],
+        red_name=team_names[1],
+        blue_gold=_team_int(last_frame, "blueTeam", "totalGold"),
+        red_gold=_team_int(last_frame, "redTeam", "totalGold"),
+        blue_kills=_team_int(last_frame, "blueTeam", "totalKills"),
+        red_kills=_team_int(last_frame, "redTeam", "totalKills"),
+        blue_barons=_team_int(last_frame, "blueTeam", "barons") or 0,
+        red_barons=_team_int(last_frame, "redTeam", "barons") or 0,
+        blue_dragons=_dragon_list(last_frame.get("blueTeam", {}).get("dragons")),
+        red_dragons=_dragon_list(last_frame.get("redTeam", {}).get("dragons")),
         draft=_draft_lines(metadata, details, team_names),
         players=_player_lines(metadata, stats_by_participant, team_names, winner),
     )
@@ -318,6 +340,15 @@ def _winner_name(
     return None
 
 
+def _loser_name(winner: str | None, team_names: tuple[str, str]) -> str | None:
+    if not winner:
+        return None
+    for team_name in team_names:
+        if team_name != winner:
+            return team_name
+    return None
+
+
 def _result_label(team_name: str, winner: str | None) -> str:
     if not winner:
         return "-"
@@ -371,6 +402,16 @@ def _damage(stats: dict[str, Any]) -> int | None:
 
 def _stat_int(stats: dict[str, Any], key: str) -> int | None:
     return _to_int(stats.get(key))
+
+
+def _team_int(frame: dict[str, Any], team_key: str, stat_key: str) -> int | None:
+    return _to_int(frame.get(team_key, {}).get(stat_key))
+
+
+def _dragon_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item]
 
 
 def _to_int(value: Any) -> int | None:
