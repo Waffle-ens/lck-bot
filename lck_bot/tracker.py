@@ -6,20 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from lck_bot.formatting import format_game_clock
 from lck_bot.lolesports import LolesportsClient, LolesportsError
 from lck_bot.match_data import DraftLine, game_number, game_state, match_title, max_sets
 
 LOGGER = logging.getLogger(__name__)
-
-
-@dataclass
-class KillEvent:
-    game_id: str
-    timestamp_ms: int | None
-    killer: str
-    victim: str
-    inferred: bool = True
 
 
 @dataclass
@@ -41,7 +31,6 @@ class GameSnapshot:
     blue_dragons: list[str] = field(default_factory=list)
     red_dragons: list[str] = field(default_factory=list)
     draft: list[DraftLine] = field(default_factory=list)
-    kill_events: list[KillEvent] = field(default_factory=list)
 
     @property
     def gold_diff(self) -> int:
@@ -53,7 +42,6 @@ class LiveTracker:
         self.client = client
         self.poll_seconds = poll_seconds
         self.snapshots: dict[str, GameSnapshot] = {}
-        self._last_frame_by_game: dict[str, dict[str, Any]] = {}
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._lock = asyncio.Lock()
@@ -120,46 +108,16 @@ class LiveTracker:
             return None
 
         metadata = window.get("gameMetadata", {})
-        participant_names = _participant_names(metadata)
         team_names = _team_names(metadata, event)
         draft = _draft_lines(metadata, team_names)
 
-        last_seen = self._last_frame_by_game.get(game_id)
-        new_events: list[KillEvent] = []
         ordered_frames = sorted(frames, key=_frame_sort_time)
-        for frame in ordered_frames:
-            if last_seen and _frame_sort_time(frame) <= _frame_sort_time(last_seen):
-                continue
-            if last_seen:
-                new_events.extend(_infer_kill_events(game_id, last_seen, frame, participant_names))
-            last_seen = frame
-
-        if last_seen is None:
+        if not ordered_frames:
             return None
 
-        self._last_frame_by_game[game_id] = last_seen
+        last_seen = ordered_frames[-1]
         blue = last_seen.get("blueTeam", {})
         red = last_seen.get("redTeam", {})
-
-        existing = self.snapshots.get(
-            game_id,
-            GameSnapshot(
-                game_id=game_id,
-                event_name=match_title(event),
-                set_number=game_number(game, 1),
-                max_sets=max_sets(event),
-                state=game_state(game),
-                blue_name=team_names[0],
-                red_name=team_names[1],
-                blue_gold=0,
-                red_gold=0,
-                blue_kills=0,
-                red_kills=0,
-                blue_barons=0,
-                red_barons=0,
-                timestamp_ms=None,
-            ),
-        ).kill_events
 
         snapshot = GameSnapshot(
             game_id=game_id,
@@ -179,7 +137,6 @@ class LiveTracker:
             red_dragons=_dragon_list(red.get("dragons")),
             timestamp_ms=_frame_time(last_seen),
             draft=draft,
-            kill_events=[*existing, *new_events][-30:],
         )
         self.snapshots[game_id] = snapshot
         return snapshot
@@ -232,23 +189,6 @@ def _dragon_list(value: Any) -> list[str]:
     return [str(item) for item in value if item]
 
 
-def _participant_names(metadata: dict[str, Any]) -> dict[int, str]:
-    result: dict[int, str] = {}
-    for side_key in ("blueTeamMetadata", "redTeamMetadata"):
-        participants = metadata.get(side_key, {}).get("participantMetadata", [])
-        for participant in participants:
-            participant_id = participant.get("participantId")
-            if participant_id is None:
-                continue
-            result[int(participant_id)] = (
-                participant.get("summonerName")
-                or participant.get("name")
-                or participant.get("esportsPlayerId")
-                or f"P{participant_id}"
-            )
-    return result
-
-
 def _champion_name(participant: dict[str, Any]) -> str:
     champion = participant.get("champion")
     if isinstance(champion, dict):
@@ -278,60 +218,3 @@ def _frame_sort_time(frame: dict[str, Any]) -> int:
             return 0
     game_time = _frame_time(frame)
     return game_time or 0
-
-
-def _participants(frame: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    result: dict[int, dict[str, Any]] = {}
-    for team_key in ("blueTeam", "redTeam"):
-        for participant in frame.get(team_key, {}).get("participants", []):
-            participant_id = participant.get("participantId")
-            if participant_id is not None:
-                result[int(participant_id)] = participant
-    return result
-
-
-def _infer_kill_events(
-    game_id: str,
-    previous: dict[str, Any],
-    current: dict[str, Any],
-    names: dict[int, str],
-) -> list[KillEvent]:
-    before = _participants(previous)
-    after = _participants(current)
-    killers: list[str] = []
-    victims: list[str] = []
-
-    for participant_id, current_participant in after.items():
-        previous_participant = before.get(participant_id, {})
-        kill_delta = int(current_participant.get("kills", 0) or 0) - int(
-            previous_participant.get("kills", 0) or 0
-        )
-        death_delta = int(current_participant.get("deaths", 0) or 0) - int(
-            previous_participant.get("deaths", 0) or 0
-        )
-        if kill_delta > 0:
-            killers.extend([names.get(participant_id, f"P{participant_id}")] * kill_delta)
-        if death_delta > 0:
-            victims.extend([names.get(participant_id, f"P{participant_id}")] * death_delta)
-
-    if not killers or not victims:
-        return []
-
-    timestamp_ms = _frame_time(current)
-    if len(killers) == 1 and len(victims) == 1:
-        return [KillEvent(game_id, timestamp_ms, killers[0], victims[0], inferred=True)]
-
-    return [
-        KillEvent(
-            game_id,
-            timestamp_ms,
-            " / ".join(killers),
-            " / ".join(victims),
-            inferred=True,
-        )
-    ]
-
-
-def format_kill_event(event: KillEvent) -> str:
-    marker = "추론" if event.inferred else "확정"
-    return f"{format_game_clock(event.timestamp_ms)} | {event.killer} -> {event.victim} ({marker})"

@@ -14,7 +14,7 @@ from lck_bot.match_data import (
     max_sets,
     state_label,
 )
-from lck_bot.tracker import GameSnapshot, format_kill_event
+from lck_bot.tracker import GameSnapshot
 
 BLUE = discord.Color.from_rgb(57, 102, 255)
 GREEN = discord.Color.from_rgb(35, 150, 95)
@@ -85,13 +85,6 @@ def render_live_status(snapshot: GameSnapshot) -> discord.Embed:
         picks = ", ".join(draft.picks) if draft.picks else "데이터 없음"
         embed.add_field(name=f"{draft.side} {draft.team} 픽", value=_clip(picks), inline=False)
 
-    timeline = (
-        [format_kill_event(event) for event in snapshot.kill_events[-8:]]
-        if snapshot.kill_events
-        else ["아직 추적된 킬 이벤트가 없습니다."]
-    )
-    embed.add_field(name="킬 타임라인", value=_value(timeline), inline=False)
-    embed.set_footer(text="킬 타임라인은 프레임 간 K/D 변화 기반 추론입니다.")
     return embed
 
 
@@ -266,7 +259,7 @@ def render_command_help() -> discord.Embed:
         name="/경기상황",
         value=(
             "오늘 경기 상태에 맞춰 현재 상황을 보여줍니다.\n"
-            "진행 중이면 스코어, 골드, 오브젝트, 픽, 킬 타임라인을 표시합니다."
+            "진행 중이면 스코어, 골드, 오브젝트, 픽을 표시합니다."
         ),
         inline=False,
     )
@@ -295,7 +288,6 @@ def render_command_help() -> discord.Embed:
         value="이 안내 메시지를 보여줍니다.",
         inline=False,
     )
-    embed.set_footer(text="킬 타임라인은 공개 API 프레임 데이터를 기반으로 추론됩니다.")
     return embed
 
 
