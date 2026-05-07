@@ -40,9 +40,24 @@ from lck_bot.presentation import (
 from lck_bot.report_cache import YesterdayMatchCache, cached_match_payload
 from lck_bot.tracker import LiveTracker
 
+logging.raiseExceptions = False
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
+
+
+class DiscordLogFloodFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = str(record.msg)
+        if record.name == "discord.gateway" and "heartbeat blocked" in message:
+            return False
+        if record.name == "discord.client" and message.startswith("Attempting a reconnect in"):
+            return False
+        return True
+
+
+for discord_logger_name in ("discord.client", "discord.gateway"):
+    logging.getLogger(discord_logger_name).addFilter(DiscordLogFloodFilter())
 
 COOLDOWNS = {
     "경기상황": CooldownRule(user_seconds=30, guild_seconds=10),
@@ -550,7 +565,7 @@ async def _optional_details(
 
 def main() -> None:
     bot = LckDiscordBot()
-    bot.run(bot.settings.discord_token)
+    bot.run(bot.settings.discord_token, log_handler=None)
 
 
 if __name__ == "__main__":
