@@ -26,6 +26,7 @@ from lck_bot.presentation import (
     render_no_completed_today,
     render_no_summary_today,
     render_no_today_games,
+    render_no_weekly_schedule,
     render_no_yesterday_games,
     render_pending_result_game,
     render_result_game,
@@ -33,6 +34,7 @@ from lck_bot.presentation import (
     render_result_summary,
     render_roster,
     render_upcoming_today,
+    render_weekly_schedule,
     render_yesterday_game,
     render_yesterday_match_not_found,
     render_yesterday_match_selection_required,
@@ -65,6 +67,7 @@ COOLDOWNS = {
     "경기결과": CooldownRule(user_seconds=180, guild_seconds=30),
     "경기요약": CooldownRule(user_seconds=180, guild_seconds=30),
     "어제경기": CooldownRule(user_seconds=180, guild_seconds=30),
+    "경기일정": CooldownRule(user_seconds=60, guild_seconds=20),
     "명령어": CooldownRule(user_seconds=30, guild_seconds=10),
 }
 
@@ -148,6 +151,26 @@ def register_commands(bot: LckDiscordBot) -> None:
             return
         try:
             await _send_today_status(bot, interaction)
+        except LolesportsError as exc:
+            await interaction.followup.send(f"LoL Esports 데이터를 가져오지 못했습니다: `{exc}`")
+
+    @bot.tree.command(
+        name="경기일정",
+        description="이번 주 LCK 경기 일정을 날짜와 시간별로 보여줍니다.",
+    )
+    async def weekly_schedule(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        if await _send_cooldown_if_needed(bot, interaction, "경기일정"):
+            return
+        try:
+            week_start, week_end = _current_week_range()
+            events = await _events_between(bot, week_start, week_end)
+            events.sort(key=_event_sort_key)
+            if not events:
+                next_event = await _next_event(bot)
+                await interaction.followup.send(embed=render_no_weekly_schedule(week_start, week_end, next_event))
+                return
+            await interaction.followup.send(embed=render_weekly_schedule(events, week_start, week_end))
         except LolesportsError as exc:
             await interaction.followup.send(f"LoL Esports 데이터를 가져오지 못했습니다: `{exc}`")
 
@@ -499,6 +522,26 @@ async def _yesterdays_events(bot: LckDiscordBot) -> list[dict[str, Any]]:
 async def _events_on_date(bot: LckDiscordBot, target_date: date) -> list[dict[str, Any]]:
     events = await bot.lolesports.get_schedule_events()
     return [event for event in events if _event_date(event) == target_date]
+
+
+async def _events_between(
+    bot: LckDiscordBot,
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, Any]]:
+    events = await bot.lolesports.get_schedule_events()
+    return [
+        event
+        for event in events
+        if (event_time := _event_datetime(event)) and start <= event_time < end
+    ]
+
+
+def _current_week_range() -> tuple[datetime, datetime]:
+    today = datetime.now(KST).date()
+    week_start_date = today - timedelta(days=today.weekday())
+    week_start = datetime.combine(week_start_date, time.min, tzinfo=KST)
+    return week_start, week_start + timedelta(days=7)
 
 
 def _yesterday_date() -> date:

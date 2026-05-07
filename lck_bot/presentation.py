@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import discord
@@ -102,6 +102,54 @@ def render_upcoming_today(events: list[dict[str, Any]]) -> discord.Embed:
 def render_no_today_games(next_event: dict[str, Any] | None) -> discord.Embed:
     embed = discord.Embed(
         title="오늘 예정된 LCK 경기가 없습니다",
+        color=GRAY,
+    )
+    if next_event:
+        embed.add_field(
+            name="다음 경기",
+            value=f"`{_event_time(next_event, include_date=True)}` {_event_title(next_event)}",
+            inline=False,
+        )
+    return embed
+
+
+def render_weekly_schedule(
+    events: list[dict[str, Any]],
+    week_start: datetime,
+    week_end: datetime,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="이번 주 LCK 경기 일정",
+        description=f"{week_start.strftime('%Y-%m-%d')} ~ {(week_end - timedelta(days=1)).strftime('%Y-%m-%d')}",
+        color=BLUE,
+    )
+
+    grouped: dict[str, list[str]] = {}
+    for event in events:
+        parsed = _parse_event_time(event)
+        if not parsed:
+            label = "날짜 미정"
+            time_text = "시간 미정"
+        else:
+            label = _date_label(parsed)
+            time_text = parsed.strftime("%H:%M")
+        grouped.setdefault(label, []).append(
+            f"`{time_text}` {_event_title(event)} - {_event_state_label(event.get('state'))}"
+        )
+
+    for label, lines in grouped.items():
+        embed.add_field(name=label, value=_value(lines), inline=False)
+    return embed
+
+
+def render_no_weekly_schedule(
+    week_start: datetime,
+    week_end: datetime,
+    next_event: dict[str, Any] | None,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="이번 주 예정된 LCK 경기가 없습니다",
+        description=f"{week_start.strftime('%Y-%m-%d')} ~ {(week_end - timedelta(days=1)).strftime('%Y-%m-%d')}",
         color=GRAY,
     )
     if next_event:
@@ -261,6 +309,11 @@ def render_command_help() -> discord.Embed:
             "오늘 경기 상태에 맞춰 현재 상황을 보여줍니다.\n"
             "진행 중이면 스코어, 골드, 오브젝트, 픽을 표시합니다."
         ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/경기일정",
+        value="이번 주 LCK 경기 일정을 날짜와 시간별로 보여줍니다.",
         inline=False,
     )
     embed.add_field(
@@ -467,6 +520,11 @@ def _event_time(event: dict[str, Any], include_date: bool = False) -> str:
         return "시간 미정"
     pattern = "%Y-%m-%d %H:%M" if include_date else "%H:%M"
     return parsed.strftime(pattern)
+
+
+def _date_label(value: datetime) -> str:
+    weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+    return f"{value.month}월 {value.day}일 ({weekdays[value.weekday()]})"
 
 
 def _parse_event_time(event: dict[str, Any]) -> datetime | None:
