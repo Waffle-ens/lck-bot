@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 LOCALE = "ko-KR"
 LCK_LEAGUE_ID = "98767991310872058"
+LIVE_WINDOW_DELAY_SECONDS = 90
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -211,7 +212,7 @@ def pick_event(schedule: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def latest_starting_time() -> str:
-    now = (datetime.now(UTC) - timedelta(seconds=60)).replace(microsecond=0)
+    now = (datetime.now(UTC) - timedelta(seconds=LIVE_WINDOW_DELAY_SECONDS)).replace(microsecond=0)
     rounded = now.replace(second=now.second - (now.second % 10))
     return rounded.isoformat().replace("+00:00", "Z")
 

@@ -14,6 +14,7 @@ class LolesportsError(RuntimeError):
 
 
 T = TypeVar("T")
+LIVE_WINDOW_DELAY_SECONDS = 90
 
 
 @dataclass(frozen=True)
@@ -211,6 +212,6 @@ async def retry_api_call(call: Callable[[], Awaitable[T]], attempts: int = 2) ->
 
 
 def latest_starting_time() -> str:
-    now = (datetime.now(UTC) - timedelta(seconds=60)).replace(microsecond=0)
+    now = (datetime.now(UTC) - timedelta(seconds=LIVE_WINDOW_DELAY_SECONDS)).replace(microsecond=0)
     rounded = now.replace(second=now.second - (now.second % 10))
     return rounded.isoformat().replace("+00:00", "Z")
