@@ -328,7 +328,8 @@ async def _send_today_status(bot: LckDiscordBot, interaction: discord.Interactio
         else:
             upcoming = [event for event in todays_events if _event_state(event) == "unstarted"]
             upcoming.sort(key=_event_sort_key)
-            await interaction.followup.send(embed=render_live_pending(live_events[0], upcoming))
+            completed_reports = await _completed_reports_for_event(bot, live_events[0])
+            await interaction.followup.send(embed=render_live_pending(live_events[0], upcoming, completed_reports))
         return
 
     upcoming = [event for event in todays_events if _event_state(event) == "unstarted"]
@@ -349,6 +350,22 @@ async def _send_today_status(bot: LckDiscordBot, interaction: discord.Interactio
 
     next_event = await _next_event(bot)
     await interaction.followup.send(embed=render_no_today_games(next_event))
+
+
+async def _completed_reports_for_event(
+    bot: LckDiscordBot,
+    event_summary: dict[str, Any],
+) -> list[GameReport]:
+    try:
+        event = await _event_details(bot, event_summary)
+        return [
+            report
+            for report in await _build_reports(bot, event)
+            if report.state == "completed"
+        ]
+    except LolesportsError as exc:
+        LOGGER.info("Could not fetch completed set reports for live pending event: %s", exc)
+        return []
 
 
 async def _yesterday_cache_worker(bot: LckDiscordBot) -> None:

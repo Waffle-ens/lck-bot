@@ -267,12 +267,31 @@ def render_live_redirect_notice() -> discord.Embed:
     )
 
 
-def render_live_pending(event: dict[str, Any], upcoming: list[dict[str, Any]]) -> discord.Embed:
+def render_live_pending(
+    event: dict[str, Any],
+    upcoming: list[dict[str, Any]],
+    completed_reports: list[GameReport] | None = None,
+) -> discord.Embed:
     embed = discord.Embed(
         title="다음 세트 준비 중",
         description=f"{_event_title(event)} 경기가 곧 시작될 예정입니다.",
         color=GOLD,
     )
+    if completed_reports:
+        latest = max(completed_reports, key=lambda report: report.set_number)
+        lines = [f"{latest.set_number}세트 | {state_label(latest.state)}"]
+        if latest.winner and latest.loser:
+            lines.append(f"승패: {latest.winner} 승 / {latest.loser} 패")
+        lines.append(
+            f"스코어: {latest.blue_name} {_number_or_dash(latest.blue_kills)}킬 / "
+            f"{latest.red_name} {_number_or_dash(latest.red_kills)}킬"
+        )
+        lines.append(
+            f"골드: {latest.blue_name} {_gold_or_dash(latest.blue_gold)} / "
+            f"{latest.red_name} {_gold_or_dash(latest.red_gold)}"
+        )
+        lines.append(f"골드차: {_gold_diff(latest)}")
+        embed.add_field(name="최근 세트 결과", value=_value(lines), inline=False)
     if upcoming:
         lines = [f"`{_event_time(item)}` {_event_title(item)}" for item in upcoming]
         embed.add_field(name="오늘 남은 경기", value=_value(lines), inline=False)
