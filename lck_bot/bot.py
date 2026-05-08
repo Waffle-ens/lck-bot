@@ -329,7 +329,14 @@ async def _send_today_status(bot: LckDiscordBot, interaction: discord.Interactio
             upcoming = [event for event in todays_events if _event_state(event) == "unstarted"]
             upcoming.sort(key=_event_sort_key)
             completed_reports = await _completed_reports_for_event(bot, live_events[0])
-            await interaction.followup.send(embed=render_live_pending(live_events[0], upcoming, completed_reports))
+            await interaction.followup.send(
+                embed=render_live_pending(
+                    live_events[0],
+                    upcoming,
+                    completed_reports,
+                    match_decided=_match_is_decided(live_events[0], completed_reports),
+                )
+            )
         return
 
     upcoming = [event for event in todays_events if _event_state(event) == "unstarted"]
@@ -366,6 +373,40 @@ async def _completed_reports_for_event(
     except LolesportsError as exc:
         LOGGER.info("Could not fetch completed set reports for live pending event: %s", exc)
         return []
+
+
+def _match_is_decided(event: dict[str, Any], reports: list[GameReport]) -> bool:
+    if not reports:
+        return False
+
+    required_wins = _required_match_wins(event, reports)
+    for team in event.get("match", {}).get("teams", []):
+        wins = _to_int((team.get("result") or {}).get("gameWins")) or 0
+        if wins >= required_wins:
+            return True
+
+    wins: dict[str, int] = {}
+    for report in reports:
+        if not report.winner:
+            continue
+        wins[report.winner] = wins.get(report.winner, 0) + 1
+    return any(count >= required_wins for count in wins.values())
+
+
+def _required_match_wins(event: dict[str, Any], reports: list[GameReport]) -> int:
+    if reports:
+        return reports[0].max_sets // 2 + 1
+    count = _to_int(event.get("match", {}).get("strategy", {}).get("count"))
+    if count:
+        return count // 2 + 1
+    return 2
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 async def _yesterday_cache_worker(bot: LckDiscordBot) -> None:

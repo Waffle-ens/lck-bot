@@ -271,10 +271,17 @@ def render_live_pending(
     event: dict[str, Any],
     upcoming: list[dict[str, Any]],
     completed_reports: list[GameReport] | None = None,
+    match_decided: bool = False,
 ) -> discord.Embed:
+    title = "다음 매치 대기 중" if match_decided else "다음 세트 준비 중"
+    description = (
+        f"{_event_title(event)} 매치가 종료되었고 다음 매치를 기다리는 중입니다."
+        if match_decided
+        else f"{_event_title(event)} 경기가 곧 시작될 예정입니다."
+    )
     embed = discord.Embed(
-        title="다음 세트 준비 중",
-        description=f"{_event_title(event)} 경기가 곧 시작될 예정입니다.",
+        title=title,
+        description=description,
         color=GOLD,
     )
     if completed_reports:
@@ -294,7 +301,8 @@ def render_live_pending(
         embed.add_field(name="최근 세트 결과", value=_value(lines), inline=False)
     if upcoming:
         lines = [f"`{_event_time(item)}` {_event_title(item)}" for item in upcoming]
-        embed.add_field(name="오늘 남은 경기", value=_value(lines), inline=False)
+        field_name = "다음 매치" if match_decided else "오늘 남은 경기"
+        embed.add_field(name=field_name, value=_value(lines), inline=False)
     return embed
 
 
