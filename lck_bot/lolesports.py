@@ -15,6 +15,7 @@ class LolesportsError(RuntimeError):
 
 T = TypeVar("T")
 LIVE_WINDOW_DELAY_SECONDS = 90
+MAX_CACHE_ENTRIES = 256
 
 
 @dataclass(frozen=True)
@@ -65,8 +66,10 @@ class LolesportsClient:
     ) -> dict[str, Any]:
         key = _cache_key(url, params)
         if ttl_seconds > 0:
+            now = monotonic()
+            self._prune_cache(now)
             cached = self._cache.get(key)
-            if cached and cached.expires_at > monotonic():
+            if cached and cached.expires_at > now:
                 return cached.payload
 
         await self.start()
@@ -76,14 +79,14 @@ class LolesportsClient:
                 if response.status == 204:
                     payload: dict[str, Any] = {}
                     if ttl_seconds > 0:
-                        self._cache[key] = _CacheEntry(monotonic() + ttl_seconds, payload)
+                        self._set_cache(key, ttl_seconds, payload)
                     return payload
                 if response.status >= 400:
                     text = await response.text()
                     raise LolesportsError(f"LoL Esports API {response.status}: {text[:200]}")
                 payload = await response.json()
                 if ttl_seconds > 0:
-                    self._cache[key] = _CacheEntry(monotonic() + ttl_seconds, payload)
+                    self._set_cache(key, ttl_seconds, payload)
                 return payload
         except TimeoutError as exc:
             raise LolesportsError("LoL Esports API request timed out.") from exc
@@ -192,6 +195,30 @@ class LolesportsClient:
 
     def event_id(self, event: dict[str, Any]) -> str:
         return self._event_id(event)
+
+    def _set_cache(
+        self,
+        key: tuple[str, tuple[tuple[str, str], ...]],
+        ttl_seconds: int,
+        payload: dict[str, Any],
+    ) -> None:
+        self._cache[key] = _CacheEntry(monotonic() + ttl_seconds, payload)
+        if len(self._cache) > MAX_CACHE_ENTRIES:
+            self._trim_cache()
+
+    def _prune_cache(self, now: float | None = None) -> None:
+        now = monotonic() if now is None else now
+        expired = [key for key, entry in self._cache.items() if entry.expires_at <= now]
+        for key in expired:
+            self._cache.pop(key, None)
+
+    def _trim_cache(self) -> None:
+        overflow = len(self._cache) - MAX_CACHE_ENTRIES
+        if overflow <= 0:
+            return
+        oldest_keys = sorted(self._cache, key=lambda key: self._cache[key].expires_at)[:overflow]
+        for key in oldest_keys:
+            self._cache.pop(key, None)
 
 
 def _cache_key(url: str, params: dict[str, Any] | None) -> tuple[str, tuple[tuple[str, str], ...]]:
