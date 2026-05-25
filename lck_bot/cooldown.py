@@ -3,6 +3,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+COOLDOWN_RETENTION_SECONDS = 60 * 60
+COOLDOWN_PRUNE_INTERVAL_SECONDS = 5 * 60
+
 
 @dataclass(frozen=True)
 class CooldownRule:
@@ -21,6 +24,7 @@ class CooldownManager:
     def __init__(self) -> None:
         self._user_last_used: dict[tuple[str, int], float] = {}
         self._guild_last_used: dict[tuple[str, int], float] = {}
+        self._next_prune_at = 0.0
 
     def check(
         self,
@@ -30,6 +34,7 @@ class CooldownManager:
         rule: CooldownRule,
     ) -> CooldownHit | None:
         now = time.monotonic()
+        self._prune_expired(now)
         user_key = (command_name, user_id)
         user_hit = self._hit(
             last_used=self._user_last_used.get(user_key),
@@ -72,6 +77,29 @@ class CooldownManager:
             return None
         remaining = max(1, int(limit_seconds - elapsed + 0.999))
         return CooldownHit(scope=scope, remaining_seconds=remaining, limit_seconds=limit_seconds)
+
+    def _prune_expired(self, now: float) -> None:
+        if now < self._next_prune_at:
+            return
+
+        cutoff = now - COOLDOWN_RETENTION_SECONDS
+        self._user_last_used = {
+            key: last_used
+            for key, last_used in self._user_last_used.items()
+            if last_used >= cutoff
+        }
+        self._guild_last_used = {
+            key: last_used
+            for key, last_used in self._guild_last_used.items()
+            if last_used >= cutoff
+        }
+        self._next_prune_at = now + COOLDOWN_PRUNE_INTERVAL_SECONDS
+
+    def stats(self) -> dict[str, int]:
+        return {
+            "cooldown_user_keys": len(self._user_last_used),
+            "cooldown_guild_keys": len(self._guild_last_used),
+        }
 
 
 def format_remaining(seconds: int) -> str:

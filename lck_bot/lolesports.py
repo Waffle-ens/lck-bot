@@ -220,6 +220,10 @@ class LolesportsClient:
         for key in oldest_keys:
             self._cache.pop(key, None)
 
+    def stats(self) -> dict[str, int]:
+        self._prune_cache()
+        return {"lolesports_cache_entries": len(self._cache)}
+
 
 def _cache_key(url: str, params: dict[str, Any] | None) -> tuple[str, tuple[tuple[str, str], ...]]:
     return url, tuple(sorted((str(key), str(value)) for key, value in (params or {}).items()))

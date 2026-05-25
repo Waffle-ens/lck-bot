@@ -10,6 +10,7 @@ from lck_bot.lolesports import LolesportsClient, LolesportsError
 from lck_bot.match_data import DraftLine, game_number, game_state, match_title, max_sets
 
 LOGGER = logging.getLogger(__name__)
+MAX_SNAPSHOTS = 8
 
 
 @dataclass
@@ -138,8 +139,19 @@ class LiveTracker:
             timestamp_ms=_frame_time(last_seen),
             draft=draft,
         )
+        if game_id in self.snapshots:
+            self.snapshots.pop(game_id)
         self.snapshots[game_id] = snapshot
+        self._trim_snapshots()
         return snapshot
+
+    def _trim_snapshots(self) -> None:
+        while len(self.snapshots) > MAX_SNAPSHOTS:
+            oldest_key = next(iter(self.snapshots))
+            self.snapshots.pop(oldest_key, None)
+
+    def stats(self) -> dict[str, int]:
+        return {"live_snapshots": len(self.snapshots)}
 
 
 def _team_names(metadata: dict[str, Any], event: dict[str, Any]) -> tuple[str, str]:

@@ -46,6 +46,7 @@ logging.raiseExceptions = False
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
+OBSERVABILITY_LOG_SECONDS = 10 * 60
 
 
 class DiscordLogFloodFilter(logging.Filter):
@@ -86,6 +87,7 @@ class LckDiscordBot(discord.Client):
         self.cooldowns = CooldownManager()
         self.yesterday_cache = YesterdayMatchCache(self.settings.cache_dir)
         self._yesterday_cache_task: asyncio.Task[None] | None = None
+        self._observability_task: asyncio.Task[None] | None = None
 
     async def setup_hook(self) -> None:
         await self.lolesports.start()
@@ -102,12 +104,19 @@ class LckDiscordBot(discord.Client):
 
         self.tracker.start()
         self._yesterday_cache_task = asyncio.create_task(_yesterday_cache_worker(self))
+        self._observability_task = asyncio.create_task(
+            _observability_worker(self), name="lck-observability"
+        )
 
     async def close(self) -> None:
         if self._yesterday_cache_task:
             self._yesterday_cache_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._yesterday_cache_task
+        if self._observability_task:
+            self._observability_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._observability_task
         await self.tracker.stop()
         await self.lolesports.close()
         await super().close()
@@ -407,6 +416,40 @@ def _to_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+async def _observability_worker(bot: LckDiscordBot) -> None:
+    while True:
+        try:
+            _log_runtime_stats(bot)
+        except Exception:
+            LOGGER.exception("Could not log runtime stats")
+        await asyncio.sleep(OBSERVABILITY_LOG_SECONDS)
+
+
+def _log_runtime_stats(bot: LckDiscordBot) -> None:
+    stats: dict[str, int | float] = {}
+    rss_mb = _process_rss_mb()
+    if rss_mb is not None:
+        stats["rss_mb"] = round(rss_mb, 1)
+    stats.update(bot.lolesports.stats())
+    stats.update(bot.cooldowns.stats())
+    stats.update(bot.tracker.stats())
+    LOGGER.info("Runtime stats: %s", " ".join(f"{key}={value}" for key, value in stats.items()))
+
+
+def _process_rss_mb() -> float | None:
+    try:
+        with open("/proc/self/status", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.startswith("VmRSS:"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2:
+                    return int(parts[1]) / 1024
+    except OSError:
+        return None
+    return None
 
 
 async def _yesterday_cache_worker(bot: LckDiscordBot) -> None:
